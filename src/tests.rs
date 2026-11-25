@@ -88,6 +88,39 @@ fn env(
 }
 
 #[test]
+fn test_parse_string() {
+    struct Case {
+        description: &'static str,
+        input: &'static str,
+        expected: Option<&'static str>, // value of key "k"
+        borrowed: bool,                 // zero-copy expected
+    }
+    let cases = [
+        Case { description: "plain string borrows", input: r#"{"k":"abc"}"#, expected: Some("abc"), borrowed: true },
+        Case { description: "empty string borrows", input: r#"{"k":""}"#, expected: Some(""), borrowed: true },
+        Case { description: "multibyte UTF-8 borrows", input: r#"{"k":"café-日本"}"#, expected: Some("café-日本"), borrowed: true },
+        Case { description: "escaped quote copies", input: r#"{"k":"a\"b"}"#, expected: Some("a\"b"), borrowed: false },
+        Case { description: "escape after multibyte", input: r#"{"k":"é\nx"}"#, expected: Some("é\nx"), borrowed: false },
+        Case { description: "unicode escape", input: r#"{"k":"\u00e9!"}"#, expected: Some("é!"), borrowed: false },
+        Case { description: "escaped key matches", input: r#"{"\u006b":"v"}"#, expected: Some("v"), borrowed: true },
+        Case { description: "unterminated string fails", input: r#"{"k":"abc"#, expected: None, borrowed: false },
+        Case { description: "unterminated after escape fails", input: r#"{"k":"a\n"#, expected: None, borrowed: false },
+        Case { description: "bad escape fails", input: r#"{"k":"a\qb"}"#, expected: None, borrowed: false },
+        Case { description: "short unicode escape fails", input: r#"{"k":"\u12"}"#, expected: None, borrowed: false },
+        Case { description: "non-string value", input: r#"{"k":1}"#, expected: None, borrowed: false },
+    ];
+    for c in cases {
+        let v = parse(c.input);
+        let got = v.as_ref().and_then(|v| v.get("k"));
+        assert_eq!(got.and_then(|v| v.as_str()), c.expected, "{}", c.description);
+        if c.expected.is_some() {
+            let b = matches!(got, Some(Val::Str(Cow::Borrowed(_))));
+            assert_eq!(b, c.borrowed, "{}: borrowed", c.description);
+        }
+    }
+}
+
+#[test]
 fn test_safe() {
     struct Case {
         description: &'static str,
@@ -306,4 +339,21 @@ fn test_render() {
         assert!(only_sgr_escapes(&got), "{}: unexpected control chars in {got:?}", c.description);
         assert_eq!(plain(&got), c.expected, "{}", c.description);
     }
+}
+
+// In-process render cost (no exec/startup), on the realistic fixture:
+//   cargo test --release -- --ignored --nocapture bench_render
+#[test]
+#[ignore]
+fn bench_render() {
+    let input = include_str!("../tests/fixtures/claude.json");
+    let e = env(None, no_head, no_tier);
+    let n = 200_000;
+    let t = std::time::Instant::now();
+    let mut bytes = 0;
+    for _ in 0..n {
+        bytes += std::hint::black_box(render(std::hint::black_box(input), &e)).len();
+    }
+    let ns = t.elapsed().as_nanos() / n as u128;
+    println!("render: {ns} ns/iter ({} B in, {} B out)", input.len(), bytes / n);
 }

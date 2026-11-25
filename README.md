@@ -35,7 +35,7 @@ Pin a tag; `flake.lock` records the commit and narHash:
 ```nix
 # flake.nix
 inputs.claude-statusline = {
-  url = "github:randomizedcoder/claude-statusline/v0.2.0";
+  url = "github:randomizedcoder/claude-statusline/v0.3.0";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -53,6 +53,38 @@ statusLine = {
 
 Or use `overlays.default`, which adds `pkgs.claude-statusline`.
 
+## Performance
+
+Claude Code runs the statusline on every update, so per-run cost matters.
+Rendering takes ~3 µs; nearly all the rest is process start-up, which is what
+v0.3.0 cuts:
+
+- **Static musl binary on Linux:** no dynamic loader, no shared libraries to
+  map and relocate.
+- **`#![no_main]`:** skips std's runtime init (reading `/proc/self/maps`,
+  SIGSEGV/SIGBUS handlers on an alternate stack, polling fds 0-2).
+- **One stdin read** into a pre-sized buffer, instead of 32/32/64/128/... byte
+  probe reads.
+- **Zero-copy JSON strings:** they borrow from the input unless escaped, which
+  halved render time.
+
+Measured on a Threadripper PRO 3945WX, realistic 1 KiB input:
+
+| | v0.2.0 | v0.3.0 |
+|---|---|---|
+| wall time per run (hyperfine, 10k runs) | 915 µs | 444 µs |
+| user-space instructions | 378k | 53k |
+| page faults | 78 | 25 |
+| syscalls | 94 | 27 |
+| render only, in-process | 6.8 µs | 3.4 µs |
+
+Reproduce, optionally comparing against other builds:
+
+```
+nix run .#bench -- /nix/store/...-claude-statusline-0.2.0/bin/claude-statusline
+cargo test --release -- --ignored --nocapture bench_render
+```
+
 ## Develop
 
 ```
@@ -62,4 +94,4 @@ nix flake check   # build + tests + clippy -D warnings
 ```
 
 Tests are table-driven (`src/tests.rs`); each row has a `description` and
-`expected`.
+`expected`. `tests/binary.rs` runs the built binary end to end.

@@ -27,8 +27,17 @@
 // inject terminal escape sequences, and the branch is limited to git-ref-safe
 // ASCII.
 
+// Startup cost dominates (the render itself is ~10µs), so skip std's runtime
+// init: `fn main` would first read /proc/self/maps, install SIGSEGV/SIGBUS
+// handlers on an alt stack, poll fds 0-2 and ignore SIGPIPE. None of that is
+// needed here; a closed stdout just ends the process.
+#![cfg_attr(not(test), no_main)]
+// run() and the real fs readers are only reached from the no_mangle main.
+#![cfg_attr(test, allow(dead_code))]
+
+use std::borrow::Cow;
 use std::fs;
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, Read, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // Force the context (c:) segment red once it reaches this many thousand tokens,
@@ -48,17 +57,19 @@ const IDLE_STEP_MIN: i64 = 5;
 // ---------- tiny JSON ----------
 
 #[allow(dead_code)]
-enum Val {
+// Strings borrow from the input unless they contain escapes (rare), so a
+// parse allocates little more than the object/array Vecs.
+enum Val<'a> {
     Null,
     Bool(bool),
     Num(f64),
-    Str(String),
-    Arr(Vec<Val>),
-    Obj(Vec<(String, Val)>),
+    Str(Cow<'a, str>),
+    Arr(Vec<Val<'a>>),
+    Obj(Vec<(Cow<'a, str>, Val<'a>)>),
 }
 
-impl Val {
-    fn get(&self, k: &str) -> Option<&Val> {
+impl<'a> Val<'a> {
+    fn get(&self, k: &str) -> Option<&Val<'a>> {
         match self {
             Val::Obj(o) => o.iter().find(|(n, _)| n == k).map(|(_, v)| v),
             _ => None,
@@ -72,13 +83,14 @@ impl Val {
     }
     fn as_str(&self) -> Option<&str> {
         match self {
-            Val::Str(s) => Some(s.as_str()),
+            Val::Str(s) => Some(s),
             _ => None,
         }
     }
 }
 
 struct P<'a> {
+    s: &'a str,
     b: &'a [u8],
     i: usize,
 }
@@ -113,7 +125,7 @@ impl<'a> P<'a> {
         }
     }
 
-    fn value(&mut self) -> Option<Val> {
+    fn value(&mut self) -> Option<Val<'a>> {
         self.ws();
         match self.peek()? {
             b'"' => Some(Val::Str(self.string()?)),
@@ -135,13 +147,28 @@ impl<'a> P<'a> {
         }
     }
 
-    fn string(&mut self) -> Option<String> {
+    fn string(&mut self) -> Option<Cow<'a, str>> {
         self.expect(b'"')?;
-        let mut raw = Vec::<u8>::new();
+        let start = self.i;
+        // Fast path: no escapes, so borrow. Both ends are at an ASCII '"',
+        // which is always a char boundary, so the slice can't panic.
+        while let Some(&c) = self.b.get(self.i) {
+            match c {
+                b'"' => {
+                    let s = &self.s[start..self.i];
+                    self.i += 1;
+                    return Some(Cow::Borrowed(s));
+                }
+                b'\\' => break,
+                _ => self.i += 1,
+            }
+        }
+        // Slow path: unescape into an owned copy (or hit EOF and fail).
+        let mut raw = self.b[start..self.i].to_vec();
         loop {
             let c = self.eat()?;
             match c {
-                b'"' => return String::from_utf8(raw).ok(),
+                b'"' => return String::from_utf8(raw).ok().map(Cow::Owned),
                 b'\\' => {
                     let e = self.eat()?;
                     match e {
@@ -171,7 +198,7 @@ impl<'a> P<'a> {
         }
     }
 
-    fn number(&mut self) -> Option<Val> {
+    fn number(&mut self) -> Option<Val<'a>> {
         let start = self.i;
         if self.peek() == Some(b'-') {
             self.i += 1;
@@ -183,13 +210,14 @@ impl<'a> P<'a> {
                 break;
             }
         }
-        let s = std::str::from_utf8(&self.b[start..self.i]).ok()?;
-        s.parse::<f64>().ok().map(Val::Num)
+        // Only ASCII was consumed, so both ends are char boundaries.
+        self.s[start..self.i].parse::<f64>().ok().map(Val::Num)
     }
 
-    fn object(&mut self) -> Option<Val> {
+    fn object(&mut self) -> Option<Val<'a>> {
         self.expect(b'{')?;
-        let mut o = Vec::new();
+        // Most objects in both inputs have a handful of keys.
+        let mut o = Vec::with_capacity(8);
         self.ws();
         if self.peek() == Some(b'}') {
             self.i += 1;
@@ -211,7 +239,7 @@ impl<'a> P<'a> {
         }
     }
 
-    fn array(&mut self) -> Option<Val> {
+    fn array(&mut self) -> Option<Val<'a>> {
         self.expect(b'[')?;
         let mut a = Vec::new();
         self.ws();
@@ -232,8 +260,8 @@ impl<'a> P<'a> {
     }
 }
 
-fn parse(s: &str) -> Option<Val> {
-    let mut p = P { b: s.as_bytes(), i: 0 };
+fn parse(s: &str) -> Option<Val<'_>> {
+    let mut p = P { s, b: s.as_bytes(), i: 0 };
     p.value()
 }
 
@@ -477,9 +505,20 @@ fn read_mtime(path: &str) -> Option<i64> {
     Some(t.duration_since(UNIX_EPOCH).ok()?.as_secs() as i64)
 }
 
-fn main() {
-    let mut input = String::new();
-    let _ = io::stdin().read_to_string(&mut input);
+// Claude Code's JSON is ~1-4 KiB; pre-size so stdin is one read, not a
+// 32/32/64/128/... probe-and-grow sequence.
+const STDIN_CAP: usize = 16 * 1024;
+
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
+    run();
+    0
+}
+
+fn run() {
+    let mut input = String::with_capacity(STDIN_CAP);
+    let _ = io::stdin().lock().read_to_string(&mut input);
     let env = Env {
         config_dir: std::env::var("CLAUDE_CONFIG_DIR").ok(),
         now: SystemTime::now()
@@ -490,8 +529,11 @@ fn main() {
         read_tier,
         read_mtime,
     };
-    let mut out = BufWriter::new(io::stdout().lock());
+    // Flush explicitly: with no_main, std's exit-time flush never runs, and
+    // stdout is line-buffered while the line has no trailing newline.
+    let mut out = io::stdout().lock();
     let _ = out.write_all(render(&input, &env).as_bytes());
+    let _ = out.flush();
 }
 
 #[cfg(test)]
