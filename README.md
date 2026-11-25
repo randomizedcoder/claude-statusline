@@ -1,12 +1,65 @@
 # claude-statusline
 
-A fast, dependency-free [statusline](https://code.claude.com/docs/en/statusline)
-for Claude Code, and the same line in the [Codex](https://github.com/openai/codex)
-footer. Single Rust binary, std only, sub-millisecond.
+One status line for both [Claude Code](https://code.claude.com/docs/en/statusline)
+and the [Codex](https://github.com/openai/codex) TUI, showing what you need to
+know while an AI agent works in your repo:
 
 ```
 personal nixos main | c:12k:42%/57% | s:30%/70% 2h13m | Opus 5.5 hi | idle 15m
 ```
+
+## Why
+
+Both tools hide the numbers that decide how a session goes. You find out the
+context window is full when quality drops or it compacts, and you find out
+you've hit a rate limit when it stops. This line keeps them in view:
+
+- **Which account, which repo, which branch:** with several profiles (work,
+  personal, client logins) and worktrees, it's easy to run the agent in the
+  wrong one. The profile comes first.
+- **Context use, in tokens and %:** turns orange at 50% and red at 80%, or at
+  180k tokens regardless of window size, before long-context pricing and
+  quality loss set in.
+- **Rate-limit use and when it resets:** the 5-hour window, and the weekly
+  one once it's the one that matters, so you can pace work or switch accounts.
+- **Model and effort:** what you're actually running, since both are easy to
+  change mid-session.
+- **Idle time:** how long since anything happened, so an agent that's been
+  waiting on you for 40 minutes is obvious when you come back to the window.
+
+The two tools use the same layout and colours, so moving between them doesn't
+mean learning a second line.
+
+It is built to cost nothing. Claude Code runs the statusline as a new process
+on every update, so it is a static, std-only Rust binary that runs in about
+0.4 ms (most of it process start-up; rendering is ~3 µs), with no `jq`, shell
+or `git` subprocess. Codex keeps it running as a small MCP server instead,
+where each read takes ~6 µs and memory stays flat. All text from outside the
+program (JSON, git HEAD files, credentials) is stripped of control
+characters, so a malicious repo can't inject terminal escape sequences.
+
+## Install
+
+With Nix, see [Use with Nix](#use-with-nix). Otherwise:
+
+```
+cargo build --release   # target/release/claude-statusline
+```
+
+Claude Code, in `~/.claude/settings.json` (or your profile's
+`$CLAUDE_CONFIG_DIR/settings.json`):
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "/path/to/claude-statusline",
+  "refreshInterval": 60
+}
+```
+
+Codex: see [Codex](#codex).
+
+## Segments
 
 | Segment | Meaning |
 |---|---|
