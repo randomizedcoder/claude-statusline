@@ -12,11 +12,12 @@
 // or UiTree), claude.rs and codex.rs (front-ends: input -> Status).
 //
 // Output format:
-//   <profile> <dir> [<branch>] | c:<K>k:USED%/REMAIN% [| s:USED%/REMAIN% [<reset>] | <tier>] [| w:USED%/REMAIN%] [| <model> [<effort>]] [| idle <T>]
+//   <profile> <dir> [<branch>] | c:<K>k:USED%/REMAIN% [| s:USED%/REMAIN% [<reset>] | <tier>] [| w:USED%/REMAIN% [<reset>]] [| <model> [<effort>]] [| idle <T>]
 //   <K>k    = tokens currently in the context window (input+output), rounded to nearest 1k
-//   <reset> = time until the 5-hour rate-limit window resets, e.g. 2h13m / 45m
+//   <reset> = time until the rate-limit window resets, e.g. 3d16h / 2h13m / 45m
 //   <tier>  = subscription tier, shown only when rate_limits is absent
-//   w:      = the 7-day window, shown once it reaches WEEK_SHOW_PCT (50%)
+//   w:      = the 7-day window: shown once it reaches WEEK_SHOW_PCT (50%), or
+//             always (with its reset) when there's no 5-hour window
 //   <T>     = time since the transcript last changed (a prompt from you or
 //             output from Claude), in IDLE_STEP_MIN steps; hidden until the
 //             first step. Set statusLine.refreshInterval (e.g. 60) in

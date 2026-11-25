@@ -17,8 +17,9 @@
 //            if listed in the server's env_vars), else config.profile
 //   dir      thread.workspace.cwd basename; branch: nearest .git/HEAD above it
 //   c:       thread.usage.context.{used_tokens, used_percentage}
-//   s:       account.rate_limits[limit_id "codex"].primary_limit
-//   w:       the same entry's secondary_limit (the weekly window)
+//   s:, w:   account.rate_limits[limit_id "codex"] primary_limit and
+//            secondary_limit, sorted by window_minutes: <= 1 day is s:,
+//            longer is w: (on some plans primary is the weekly window)
 //   model    thread.model.display_name [reasoning_level]
 //   idle     time since thread.agent.state or token counts last changed,
 //            hidden while the agent is starting/working/thinking
@@ -35,6 +36,8 @@ const STATE_KEY: &str = "com.openai/codex-statusline-state";
 const PROTOCOL_VERSION: &str = "2025-06-18";
 // Threads whose idle state is remembered (Codex shows one at a time).
 const MAX_THREADS: usize = 32;
+// Longest rate-limit window shown as the session (s:); longer ones are w:.
+const SESSION_MAX_MIN: f64 = 24.0 * 60.0;
 
 struct Seen {
     id: String,
@@ -128,14 +131,25 @@ impl Server {
                 .or(a.first()),
             _ => None,
         };
-        let window = |k: &str| {
+        // Codex names a window by its length, not its slot: on some plans the
+        // primary window is the weekly one. Up to a day is the session (s:),
+        // longer is the week (w:); without window_minutes, primary is the
+        // session and secondary the week, as Codex's own labels assume.
+        let (mut session, mut week) = (None, None);
+        for (k, default_long) in [("primary_limit", false), ("secondary_limit", true)] {
             let w = codex_limit.and_then(|l| l.get(k));
-            Limit::from(
+            let limit = Limit::from(
                 num(w.and_then(|p| p.get("used_percent"))),
                 num(w.and_then(|p| p.get("resets_at"))),
                 now,
-            )
-        };
+            );
+            let long = num(w.and_then(|p| p.get("window_minutes")))
+                .map_or(default_long, |m| m > SESSION_MAX_MIN);
+            let slot = if long { &mut week } else { &mut session };
+            if slot.is_none() {
+                *slot = limit;
+            }
+        }
 
         let used_tokens = num(ctx.and_then(|c| c.get("used_tokens"))).unwrap_or(0.0);
         let ctx_used = num(ctx.and_then(|c| c.get("used_percentage"))).unwrap_or(0.0) as i64;
@@ -152,8 +166,8 @@ impl Server {
             ctx_k: ((used_tokens + 500.0) / 1000.0) as i64,
             ctx_used,
             ctx_remain: (100 - ctx_used).max(0),
-            session: window("primary_limit"),
-            week: window("secondary_limit"),
+            session,
+            week,
             tier: None,
             model: model.and_then(|m| text(m.get("display_name")).or_else(|| text(m.get("id")))),
             effort: model

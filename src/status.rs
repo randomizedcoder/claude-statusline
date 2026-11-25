@@ -17,8 +17,9 @@ const SHORT_HASH: usize = 7;
 // Cap for any other printed string (dir, model, profile, ...).
 pub(crate) const MAX_TEXT: usize = 128;
 
-// The weekly (w:) segment is shown only from this usage up, when it starts to
-// matter more than the 5-hour window.
+// Next to a session (s:) window, the weekly (w:) segment is shown only from
+// this usage up, when it starts to matter. With no session window it's always
+// shown, with its reset time.
 pub(crate) const WEEK_SHOW_PCT: i64 = 50;
 
 // Idle segment granularity: hidden for the first step, then rounds down to a
@@ -73,21 +74,24 @@ pub(crate) fn pick<T>(pct: i64, low: T, mid: T, high: T) -> T {
 
 fn fmt_hm(mins: i64) -> String {
     let (h, m) = (mins / 60, mins % 60);
-    if h > 0 {
+    if h >= 24 {
+        format!("{}d{}h", h / 24, h % 24)
+    } else if h > 0 {
         format!("{h}h{m}m")
     } else {
         format!("{m}m")
     }
 }
 
-// Time until the rate-limit window resets, "2h13m" or "45m". None if past.
+// Time until the rate-limit window resets, "3d16h", "2h13m" or "45m". None if
+// past.
 pub(crate) fn fmt_reset(resets_at: i64, now: i64) -> Option<String> {
     let secs = resets_at - now;
     (secs > 0).then(|| fmt_hm(secs / 60))
 }
 
 // Time since the last change, rounded down to IDLE_STEP_MIN: "5m", "55m",
-// "1h0m", "2h15m". None before the first step (or if it's in the future).
+// "1h0m", "2h15m", "1d3h". None before the first step (or if it's in the future).
 pub(crate) fn fmt_idle(last_change: i64, now: i64) -> Option<String> {
     let mins = (now - last_change) / 60 / IDLE_STEP_MIN * IDLE_STEP_MIN;
     (mins > 0).then(|| fmt_hm(mins))
@@ -139,7 +143,7 @@ pub(crate) struct Status {
     pub ctx_used: i64,
     pub ctx_remain: i64,
     pub session: Option<Limit>,
-    pub week: Option<Limit>, // shown from WEEK_SHOW_PCT
+    pub week: Option<Limit>, // shown from WEEK_SHOW_PCT, or always without session
     pub tier: Option<String>, // shown only when session is None
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -170,7 +174,7 @@ pub(crate) enum Span {
 
 impl Status {
     // The line, front-end independent:
-    // <profile> <dir> [<branch>] | c:<K>k:U%/R% [| s:U%/R% [<reset>] | <tier>] [| w:U%/R%] [| <model>] [<effort>] [| idle <T>]
+    // <profile> <dir> [<branch>] | c:<K>k:U%/R% [| s:U%/R% [<reset>] | <tier>] [| w:U%/R% [<reset>]] [| <model>] [<effort>] [| idle <T>]
     pub(crate) fn spans(&self) -> Vec<Span> {
         use Span::*;
         let mut v = Vec::with_capacity(20);
@@ -205,12 +209,19 @@ impl Status {
             v.push(Sep);
             v.push(Text(Tone::Dim, t.clone()));
         }
-        if let Some(w) = self.week.as_ref().filter(|w| w.used >= WEEK_SHOW_PCT) {
+        // The week stands in for the session when there's no session window
+        // (then always shown, with its reset); otherwise only once it matters.
+        let alone = self.session.is_none();
+        if let Some(w) = self.week.as_ref().filter(|w| alone || w.used >= WEEK_SHOW_PCT) {
             v.push(Sep);
             v.push(Text(
                 pick(w.used, Tone::SessLow, Tone::SessMid, Tone::SessHigh),
                 format!("w:{}%/{}%", w.used, w.remain),
             ));
+            if let Some(r) = w.reset.as_ref().filter(|_| alone) {
+                v.push(Gap);
+                v.push(Text(Tone::Dim, r.clone()));
+            }
         }
         if let Some(m) = &self.model {
             v.push(Sep);

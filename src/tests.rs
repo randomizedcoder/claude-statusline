@@ -194,6 +194,10 @@ fn test_fmt_reset() {
         Case { description: "59m59s", resets_at: NOW + 3599, expected: Some("59m") },
         Case { description: "exactly one hour", resets_at: NOW + 3600, expected: Some("1h0m") },
         Case { description: "2h13m", resets_at: NOW + 2 * 3600 + 13 * 60, expected: Some("2h13m") },
+        Case { description: "23h59m stays in hours", resets_at: NOW + 24 * 3600 - 60, expected: Some("23h59m") },
+        Case { description: "exactly 24h switches to days", resets_at: NOW + 24 * 3600, expected: Some("1d0h") },
+        Case { description: "88h39m -> 3d16h (minutes dropped)", resets_at: NOW + 88 * 3600 + 39 * 60, expected: Some("3d16h") },
+        Case { description: "7 days", resets_at: NOW + 7 * 86400, expected: Some("7d0h") },
     ];
     for c in cases {
         assert_eq!(fmt_reset(c.resets_at, NOW).as_deref(), c.expected, "{}", c.description);
@@ -217,6 +221,7 @@ fn test_fmt_idle() {
         Case { description: "59m rounds down to 55m", idle_secs: 59 * 60, expected: Some("55m") },
         Case { description: "exactly one hour", idle_secs: 3600, expected: Some("1h0m") },
         Case { description: "2h17m rounds down to 2h15m", idle_secs: 2 * 3600 + 17 * 60, expected: Some("2h15m") },
+        Case { description: "27h -> 1d3h", idle_secs: 27 * 3600 + 4 * 60, expected: Some("1d3h") },
     ];
     for c in cases {
         assert_eq!(fmt_idle(NOW - c.idle_secs, NOW).as_deref(), c.expected, "{}", c.description);
@@ -332,6 +337,18 @@ fn test_render() {
             input: r#"{"rate_limits":{"seven_day":{"used_percentage":80}}}"#,
             env: env(None, no_head, tier_max),
             expected: "default unknown | c:0k:0%/100% | max | w:80%/20%",
+        },
+        Case {
+            description: "weekly alone below 50%: still shown, with its reset in days",
+            input: r#"{"rate_limits":{"seven_day":{"used_percentage":3,"resets_at":1800319140}}}"#,
+            env: env(None, no_head, no_tier),
+            expected: "default unknown | c:0k:0%/100% | w:3%/97% 3d16h",
+        },
+        Case {
+            description: "weekly next to a session: reset not shown",
+            input: r#"{"rate_limits":{"five_hour":{"used_percentage":1},"seven_day":{"used_percentage":70,"resets_at":1800319140}}}"#,
+            env: env(None, no_head, no_tier),
+            expected: "default unknown | c:0k:0%/100% | s:1%/99% | w:70%/30%",
         },
         Case {
             description: "weekly not a number: hidden",
