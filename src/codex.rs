@@ -18,18 +18,16 @@
 //   dir      thread.workspace.cwd basename; branch: nearest .git/HEAD above it
 //   c:       thread.usage.context.{used_tokens, used_percentage}
 //   s:       account.rate_limits[limit_id "codex"].primary_limit
+//   w:       the same entry's secondary_limit (the weekly window)
 //   model    thread.model.display_name [reasoning_level]
 //   idle     time since thread.agent.state or token counts last changed,
 //            hidden while the agent is starting/working/thinking
 
 use crate::json::{self, parse, Val};
 use crate::status::{
-    base_name, branch_from_head, effort_abbrev, fmt_idle, fmt_reset, safe, Limit, Status,
-    MAX_TEXT,
+    base_name, branch_from_head, effort_abbrev, fmt_idle, safe, Limit, Status, MAX_TEXT,
 };
-use std::fs;
 use std::io::{self, BufRead, Write};
-use std::path::Path;
 
 pub(crate) const URI: &str = "ui://claude-statusline/footer";
 pub(crate) const TOOL: &str = "statusline";
@@ -130,16 +128,14 @@ impl Server {
                 .or(a.first()),
             _ => None,
         };
-        let primary = codex_limit.and_then(|l| l.get("primary_limit"));
-        let session = num(primary.and_then(|p| p.get("used_percent"))).map(|u| {
-            let used = u as i64; // can exceed 100
-            Limit {
-                used,
-                remain: (100 - used).max(0),
-                reset: num(primary.and_then(|p| p.get("resets_at")))
-                    .and_then(|r| fmt_reset(r as i64, now)),
-            }
-        });
+        let window = |k: &str| {
+            let w = codex_limit.and_then(|l| l.get(k));
+            Limit::from(
+                num(w.and_then(|p| p.get("used_percent"))),
+                num(w.and_then(|p| p.get("resets_at"))),
+                now,
+            )
+        };
 
         let used_tokens = num(ctx.and_then(|c| c.get("used_tokens"))).unwrap_or(0.0);
         let ctx_used = num(ctx.and_then(|c| c.get("used_percentage"))).unwrap_or(0.0) as i64;
@@ -156,7 +152,8 @@ impl Server {
             ctx_k: ((used_tokens + 500.0) / 1000.0) as i64,
             ctx_used,
             ctx_remain: (100 - ctx_used).max(0),
-            session,
+            session: window("primary_limit"),
+            week: window("secondary_limit"),
             tier: None,
             model: model.and_then(|m| text(m.get("display_name")).or_else(|| text(m.get("id")))),
             effort: model
@@ -237,26 +234,6 @@ fn error(id: &Val, code: i32, message: &str) -> String {
 
 // ---------- real I/O ----------
 
-// HEAD of the repository containing `dir`: the nearest .git above it, either
-// a directory or (worktrees, submodules) a file holding "gitdir: <path>".
-pub(crate) fn find_head(dir: &str) -> Option<String> {
-    let mut d = Path::new(dir);
-    if !d.is_absolute() {
-        return None;
-    }
-    loop {
-        let git = d.join(".git");
-        if let Ok(h) = fs::read_to_string(git.join("HEAD")) {
-            return Some(h);
-        }
-        if let Ok(f) = fs::read_to_string(&git) {
-            let gitdir = f.trim().strip_prefix("gitdir: ")?;
-            return fs::read_to_string(d.join(gitdir).join("HEAD")).ok();
-        }
-        d = d.parent()?;
-    }
-}
-
 // --profile NAME, else basename of $CODEX_HOME, else "" (then the
 // snapshot's config.profile, then "default").
 pub(crate) fn profile(args: &[&str]) -> String {
@@ -271,7 +248,7 @@ pub(crate) fn profile(args: &[&str]) -> String {
 }
 
 pub(crate) fn run(profile: String) {
-    let mut server = Server::new(profile, crate::claude::now, find_head);
+    let mut server = Server::new(profile, crate::claude::now, crate::git::find_head);
     let mut stdin = io::stdin().lock();
     let mut out = io::stdout().lock();
     let mut buf = Vec::with_capacity(64 * 1024);

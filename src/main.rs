@@ -8,14 +8,15 @@
 //                                        Codex: a stdio MCP statusline provider
 //                                        (see codex.rs)
 //
-// Layout: json.rs (parser/writer), status.rs (shared Status -> spans -> ANSI
+// Layout: json.rs (parser/writer), git.rs (HEAD lookup), status.rs (shared Status -> spans -> ANSI
 // or UiTree), claude.rs and codex.rs (front-ends: input -> Status).
 //
 // Output format:
-//   <profile> <dir> [<branch>] | c:<K>k:USED%/REMAIN% [| s:USED%/REMAIN% [<reset>] | <tier>] [| <model> [<effort>]] [| idle <T>]
+//   <profile> <dir> [<branch>] | c:<K>k:USED%/REMAIN% [| s:USED%/REMAIN% [<reset>] | <tier>] [| w:USED%/REMAIN%] [| <model> [<effort>]] [| idle <T>]
 //   <K>k    = tokens currently in the context window (input+output), rounded to nearest 1k
 //   <reset> = time until the 5-hour rate-limit window resets, e.g. 2h13m / 45m
 //   <tier>  = subscription tier, shown only when rate_limits is absent
+//   w:      = the 7-day window, shown once it reaches WEEK_SHOW_PCT (50%)
 //   <T>     = time since the transcript last changed (a prompt from you or
 //             output from Claude), in IDLE_STEP_MIN steps; hidden until the
 //             first step. Set statusLine.refreshInterval (e.g. 60) in
@@ -24,7 +25,7 @@
 // Palettes:
 //   context (c): green / orange / red   at <50 / <80 / >=80 (red from 180k tokens)
 //   session (s): bright blue / bright magenta / bright red
-//   branch: yellow; model + effort: dim; idle: pastel orange
+//   weekly (w): as session; branch: yellow; model + effort: dim; idle: pastel orange
 //
 // Security: every string printed comes from outside this program (the JSON,
 // the environment, .git/HEAD of whatever directory you're in, the credentials
@@ -42,6 +43,7 @@
 
 mod claude;
 mod codex;
+mod git;
 mod json;
 mod status;
 

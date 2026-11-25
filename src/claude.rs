@@ -3,7 +3,7 @@
 
 use crate::json::{parse, Val};
 use crate::status::{
-    base_name, branch_from_head, effort_abbrev, fmt_idle, fmt_reset, safe, tier_abbrev, Limit,
+    base_name, branch_from_head, effort_abbrev, fmt_idle, safe, tier_abbrev, Limit,
     Status, MAX_TEXT,
 };
 use std::fs;
@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) struct Env {
     pub config_dir: Option<String>,
     pub now: i64,
-    // .git/HEAD contents for a project dir
+    // .git/HEAD contents for the repo containing a project dir
     pub read_head: fn(&str) -> Option<String>,
     // subscription tier for a config dir
     pub read_tier: fn(Option<&str>) -> Option<String>,
@@ -42,7 +42,15 @@ fn text(v: Option<&Val>) -> Option<String> {
 pub(crate) fn status(input: &str, env: &Env) -> Status {
     let root = parse(input).unwrap_or(Val::Null);
     let cw = root.get("context_window");
-    let five = root.get("rate_limits").and_then(|r| r.get("five_hour"));
+    let limits = root.get("rate_limits");
+    let window = |k: &str| {
+        let w = limits.and_then(|r| r.get(k));
+        Limit::from(
+            num(w.and_then(|f| f.get("used_percentage"))),
+            num(w.and_then(|f| f.get("resets_at"))),
+            env.now,
+        )
+    };
 
     let project_dir = root
         .get("workspace")
@@ -53,15 +61,7 @@ pub(crate) fn status(input: &str, env: &Env) -> Status {
     let ti = num(cw.and_then(|w| w.get("total_input_tokens"))).unwrap_or(0.0);
     let to = num(cw.and_then(|w| w.get("total_output_tokens"))).unwrap_or(0.0);
 
-    let session = num(five.and_then(|f| f.get("used_percentage"))).map(|u| {
-        let used = u as i64;
-        Limit {
-            used,
-            remain: 100 - used,
-            reset: num(five.and_then(|f| f.get("resets_at")))
-                .and_then(|r| fmt_reset(r as i64, env.now)),
-        }
-    });
+    let session = window("five_hour");
     // Only read the credentials file when there's no rate limit to show.
     let tier = if session.is_none() {
         (env.read_tier)(env.config_dir.as_deref())
@@ -89,6 +89,7 @@ pub(crate) fn status(input: &str, env: &Env) -> Status {
         ctx_used: num(cw.and_then(|w| w.get("used_percentage"))).unwrap_or(0.0) as i64,
         ctx_remain: num(cw.and_then(|w| w.get("remaining_percentage"))).unwrap_or(100.0) as i64,
         session,
+        week: window("seven_day"),
         tier,
         model,
         effort,
@@ -105,10 +106,6 @@ pub(crate) fn render(input: &str, env: &Env) -> String {
 }
 
 // ---------- real I/O ----------
-
-pub(crate) fn read_head(project_dir: &str) -> Option<String> {
-    fs::read_to_string(format!("{project_dir}/.git/HEAD")).ok()
-}
 
 // Falls back to the active profile's subscription tier when Anthropic
 // doesn't include `rate_limits.five_hour` (enterprise / usage-based seats).
@@ -145,7 +142,7 @@ pub(crate) fn run() {
     let env = Env {
         config_dir: std::env::var("CLAUDE_CONFIG_DIR").ok(),
         now: now(),
-        read_head,
+        read_head: crate::git::find_head,
         read_tier,
         read_mtime,
     };

@@ -310,6 +310,36 @@ fn test_render() {
             expected: "default unknown | c:0k:0%/100% | s:90%/10%",
         },
         Case {
+            description: "weekly below WEEK_SHOW_PCT hidden",
+            input: r#"{"rate_limits":{"five_hour":{"used_percentage":10},"seven_day":{"used_percentage":49.9}}}"#,
+            env: env(None, no_head, no_tier),
+            expected: "default unknown | c:0k:0%/100% | s:10%/90%",
+        },
+        Case {
+            description: "weekly at WEEK_SHOW_PCT shown after session, before model",
+            input: r#"{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":1800007980},"seven_day":{"used_percentage":50,"resets_at":1800400000}},"model":{"display_name":"Opus 5.5"}}"#,
+            env: env(None, no_head, no_tier),
+            expected: "default unknown | c:0k:0%/100% | s:10%/90% 2h13m | w:50%/50% | Opus 5.5",
+        },
+        Case {
+            description: "weekly over 100: remaining clamps at 0",
+            input: r#"{"rate_limits":{"five_hour":{"used_percentage":10},"seven_day":{"used_percentage":104}}}"#,
+            env: env(None, no_head, no_tier),
+            expected: "default unknown | c:0k:0%/100% | s:10%/90% | w:104%/0%",
+        },
+        Case {
+            description: "weekly without five_hour: tier then weekly",
+            input: r#"{"rate_limits":{"seven_day":{"used_percentage":80}}}"#,
+            env: env(None, no_head, tier_max),
+            expected: "default unknown | c:0k:0%/100% | max | w:80%/20%",
+        },
+        Case {
+            description: "weekly not a number: hidden",
+            input: r#"{"rate_limits":{"seven_day":{"used_percentage":"90"}}}"#,
+            env: env(None, no_head, no_tier),
+            expected: "default unknown | c:0k:0%/100%",
+        },
+        Case {
             description: "idle segment after model + effort",
             input: r#"{"transcript_path":"/t.jsonl","model":{"display_name":"Opus 5.5"},"effort":{"level":"high"}}"#,
             env: Env { read_mtime: mtime_12m_ago, ..env(None, no_head, no_tier) },

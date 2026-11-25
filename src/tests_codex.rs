@@ -1,4 +1,5 @@
 use crate::codex::*;
+use crate::git::find_head;
 use crate::json::*;
 use crate::status::*;
 use crate::tests::{head_evil, head_main, no_head, only_sgr_escapes, plain, NOW};
@@ -57,6 +58,20 @@ fn test_codex_status() {
             read_head: no_head,
             snapshot: r#"{"account":{"rate_limits":[{"limit_id":"codex","primary_limit":{"used_percent":120.0}}]}}"#,
             expected: "p unknown | c:0k:0%/100% | s:120%/0%",
+        },
+        Case {
+            description: "secondary_limit at 50%: weekly shown",
+            profile: "p",
+            read_head: no_head,
+            snapshot: r#"{"account":{"rate_limits":[{"limit_id":"codex","primary_limit":{"used_percent":5},"secondary_limit":{"used_percent":50.0,"window_minutes":10080}}]}}"#,
+            expected: "p unknown | c:0k:0%/100% | s:5%/95% | w:50%/50%",
+        },
+        Case {
+            description: "secondary_limit only: weekly without s",
+            profile: "p",
+            read_head: no_head,
+            snapshot: r#"{"account":{"rate_limits":[{"limit_id":"codex","primary_limit":null,"secondary_limit":{"used_percent":91}}]}}"#,
+            expected: "p unknown | c:0k:0%/100% | w:91%/9%",
         },
         Case {
             description: "primary_limit null: no s segment",
@@ -336,6 +351,7 @@ fn test_ui_tree() {
                 ctx_used: 2,
                 ctx_remain: 98,
                 session: None,
+                week: None,
                 tier: None,
                 model: None,
                 effort: None,
@@ -359,6 +375,7 @@ fn test_ui_tree() {
                 ctx_used: 100,
                 ctx_remain: 0,
                 session: Some(Limit { used: 100, remain: 0, reset: Some("4h59m".into()) }),
+                week: Some(Limit { used: 100, remain: 0, reset: None }),
                 tier: Some(long.clone()),
                 model: Some(long.clone()),
                 effort: Some(long.clone()),

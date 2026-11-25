@@ -11,9 +11,10 @@ personal nixos main | c:12k:42%/57% | s:30%/70% 2h13m | Opus 5.5 hi | idle 15m
 | Segment | Meaning |
 |---|---|
 | `personal` | profile: basename of `$CLAUDE_CONFIG_DIR` (`default` if unset) |
-| `nixos main` | project directory and git branch (or short hash when detached) |
+| `nixos main` | project directory and git branch (or short hash when detached), from the nearest `.git` above it, worktrees included |
 | `c:12k:42%/57%` | context window: tokens in context, % used / % remaining. Green <50%, orange <80%, red ≥80% or ≥180k tokens |
 | `s:30%/70% 2h13m` | 5-hour rate limit: % used / % remaining, time to reset. Falls back to the subscription tier when Claude Code doesn't send rate limits |
+| `w:63%/37%` | 7-day rate limit, same palette; shown only from 50% used |
 | `Opus 5.5 hi` | model and effort level |
 | `idle 15m` | time since the transcript last changed (your prompt or Claude's output), in 5-minute steps, pastel orange. Hidden for the first 5 minutes |
 
@@ -30,6 +31,7 @@ segments, translated from Codex's snapshot:
 | dir, branch | `thread.workspace.cwd`; branch from the nearest `.git` above it (worktrees too) |
 | `c:` | `thread.usage.context.used_tokens` / `used_percentage` |
 | `s:` | `account.rate_limits[limit_id = "codex"].primary_limit` (5-hour); remaining clamps at 0 |
+| `w:` | the same entry's `secondary_limit` (weekly), shown from 50% |
 | model, effort | `thread.model.display_name`, `reasoning_level` |
 | `idle` | time since the thread's agent state or token counts last changed; hidden while the agent is working |
 
@@ -70,7 +72,7 @@ Pin a tag; `flake.lock` records the commit and narHash:
 ```nix
 # flake.nix
 inputs.claude-statusline = {
-  url = "github:randomizedcoder/claude-statusline/v0.4.0";
+  url = "github:randomizedcoder/claude-statusline/v0.5.0";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -130,6 +132,6 @@ nix flake check   # build + tests + clippy -D warnings
 
 Tests are table-driven (`src/tests.rs`); each row has a `description` and
 `expected`. `tests/binary.rs` runs the built binary end to end, in both
-modes. Layout: `src/json.rs` (parser/writer), `src/status.rs` (shared
+modes. Layout: `src/json.rs` (parser/writer), `src/git.rs` (HEAD lookup), `src/status.rs` (shared
 `Status` → spans → ANSI or UiTree), `src/claude.rs` and `src/codex.rs`
 (front-ends).

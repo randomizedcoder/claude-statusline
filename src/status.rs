@@ -17,6 +17,10 @@ const SHORT_HASH: usize = 7;
 // Cap for any other printed string (dir, model, profile, ...).
 pub(crate) const MAX_TEXT: usize = 128;
 
+// The weekly (w:) segment is shown only from this usage up, when it starts to
+// matter more than the 5-hour window.
+pub(crate) const WEEK_SHOW_PCT: i64 = 50;
+
 // Idle segment granularity: hidden for the first step, then rounds down to a
 // multiple of this, so it changes at most once per step.
 pub(crate) const IDLE_STEP_MIN: i64 = 5;
@@ -115,6 +119,18 @@ pub(crate) struct Limit {
     pub reset: Option<String>,
 }
 
+impl Limit {
+    // From a used percentage (which can exceed 100) and a reset time.
+    pub(crate) fn from(used: Option<f64>, resets_at: Option<f64>, now: i64) -> Option<Limit> {
+        let used = used? as i64;
+        Some(Limit {
+            used,
+            remain: (100 - used).max(0),
+            reset: resets_at.and_then(|r| fmt_reset(r as i64, now)),
+        })
+    }
+}
+
 pub(crate) struct Status {
     pub profile: String,
     pub dir: String,
@@ -123,6 +139,7 @@ pub(crate) struct Status {
     pub ctx_used: i64,
     pub ctx_remain: i64,
     pub session: Option<Limit>,
+    pub week: Option<Limit>, // shown from WEEK_SHOW_PCT
     pub tier: Option<String>, // shown only when session is None
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -153,7 +170,7 @@ pub(crate) enum Span {
 
 impl Status {
     // The line, front-end independent:
-    // <profile> <dir> [<branch>] | c:<K>k:U%/R% [| s:U%/R% [<reset>] | <tier>] [| <model>] [<effort>] [| idle <T>]
+    // <profile> <dir> [<branch>] | c:<K>k:U%/R% [| s:U%/R% [<reset>] | <tier>] [| w:U%/R%] [| <model>] [<effort>] [| idle <T>]
     pub(crate) fn spans(&self) -> Vec<Span> {
         use Span::*;
         let mut v = Vec::with_capacity(20);
@@ -187,6 +204,13 @@ impl Status {
         } else if let Some(t) = &self.tier {
             v.push(Sep);
             v.push(Text(Tone::Dim, t.clone()));
+        }
+        if let Some(w) = self.week.as_ref().filter(|w| w.used >= WEEK_SHOW_PCT) {
+            v.push(Sep);
+            v.push(Text(
+                pick(w.used, Tone::SessLow, Tone::SessMid, Tone::SessHigh),
+                format!("w:{}%/{}%", w.used, w.remain),
+            ));
         }
         if let Some(m) = &self.model {
             v.push(Sep);
