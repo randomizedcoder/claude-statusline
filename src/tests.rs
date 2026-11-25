@@ -61,6 +61,16 @@ fn tier_evil(_: Option<&str>) -> Option<String> {
     Some("\x1b]0;pwned\x07pro".into())
 }
 
+fn no_mtime(_: &str) -> Option<i64> {
+    None
+}
+fn mtime_12m_ago(_: &str) -> Option<i64> {
+    Some(NOW - 12 * 60)
+}
+fn mtime_1m_ago(_: &str) -> Option<i64> {
+    Some(NOW - 60)
+}
+
 const NOW: i64 = 1_800_000_000;
 
 fn env(
@@ -73,6 +83,7 @@ fn env(
         now: NOW,
         read_head,
         read_tier,
+        read_mtime: no_mtime,
     }
 }
 
@@ -150,6 +161,29 @@ fn test_fmt_reset() {
     ];
     for c in cases {
         assert_eq!(fmt_reset(c.resets_at, NOW).as_deref(), c.expected, "{}", c.description);
+    }
+}
+
+#[test]
+fn test_fmt_idle() {
+    struct Case {
+        description: &'static str,
+        idle_secs: i64,
+        expected: Option<&'static str>,
+    }
+    let cases = [
+        Case { description: "just changed", idle_secs: 0, expected: None },
+        Case { description: "mtime in the future (clock skew)", idle_secs: -600, expected: None },
+        Case { description: "4m59s: still hidden", idle_secs: 299, expected: None },
+        Case { description: "exactly 5m: first step shown", idle_secs: 300, expected: Some("5m") },
+        Case { description: "9m59s rounds down to 5m", idle_secs: 599, expected: Some("5m") },
+        Case { description: "10m", idle_secs: 600, expected: Some("10m") },
+        Case { description: "59m rounds down to 55m", idle_secs: 59 * 60, expected: Some("55m") },
+        Case { description: "exactly one hour", idle_secs: 3600, expected: Some("1h0m") },
+        Case { description: "2h17m rounds down to 2h15m", idle_secs: 2 * 3600 + 17 * 60, expected: Some("2h15m") },
+    ];
+    for c in cases {
+        assert_eq!(fmt_idle(NOW - c.idle_secs, NOW).as_deref(), c.expected, "{}", c.description);
     }
 }
 
@@ -238,6 +272,24 @@ fn test_render() {
             input: r#"{"rate_limits":{"five_hour":{"used_percentage":90,"resets_at":1}}}"#,
             env: env(None, no_head, no_tier),
             expected: "default unknown | c:0k:0%/100% | s:90%/10%",
+        },
+        Case {
+            description: "idle segment after model + effort",
+            input: r#"{"transcript_path":"/t.jsonl","model":{"display_name":"Opus 5.5"},"effort":{"level":"high"}}"#,
+            env: Env { read_mtime: mtime_12m_ago, ..env(None, no_head, no_tier) },
+            expected: "default unknown | c:0k:0%/100% | Opus 5.5 hi | idle 10m",
+        },
+        Case {
+            description: "idle hidden within the first 5 minutes",
+            input: r#"{"transcript_path":"/t.jsonl"}"#,
+            env: Env { read_mtime: mtime_1m_ago, ..env(None, no_head, no_tier) },
+            expected: "default unknown | c:0k:0%/100%",
+        },
+        Case {
+            description: "idle hidden without transcript_path",
+            input: r#"{}"#,
+            env: Env { read_mtime: mtime_12m_ago, ..env(None, no_head, no_tier) },
+            expected: "default unknown | c:0k:0%/100%",
         },
         Case {
             description: "escape injection via branch, dir, model, effort, tier, profile",

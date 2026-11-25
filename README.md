@@ -4,7 +4,7 @@ A fast, dependency-free [statusline](https://code.claude.com/docs/en/statusline)
 for Claude Code. Single Rust binary, std only, sub-millisecond.
 
 ```
-personal nixos main | c:12k:42%/57% | s:30%/70% 2h13m | Opus 5.5 hi
+personal nixos main | c:12k:42%/57% | s:30%/70% 2h13m | Opus 5.5 hi | idle 15m
 ```
 
 | Segment | Meaning |
@@ -14,6 +14,7 @@ personal nixos main | c:12k:42%/57% | s:30%/70% 2h13m | Opus 5.5 hi
 | `c:12k:42%/57%` | context window: tokens in context, % used / % remaining. Green <50%, orange <80%, red ≥80% or ≥180k tokens |
 | `s:30%/70% 2h13m` | 5-hour rate limit: % used / % remaining, time to reset. Falls back to the subscription tier when Claude Code doesn't send rate limits |
 | `Opus 5.5 hi` | model and effort level |
+| `idle 15m` | time since the transcript last changed (your prompt or Claude's output), in 5-minute steps, pastel orange. Hidden for the first 5 minutes |
 
 ## Security
 
@@ -34,7 +35,7 @@ Pin a tag; `flake.lock` records the commit and narHash:
 ```nix
 # flake.nix
 inputs.claude-statusline = {
-  url = "github:randomizedcoder/claude-statusline/v0.1.0";
+  url = "github:randomizedcoder/claude-statusline/v0.2.0";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -45,6 +46,8 @@ Then point Claude Code's `settings.json` at the binary, e.g. from home-manager:
 statusLine = {
   type = "command";
   command = lib.getExe inputs.claude-statusline.packages.${pkgs.stdenv.hostPlatform.system}.default;
+  # Re-run every 60s as well as on events, so `idle` advances while you're away.
+  refreshInterval = 60;
 };
 ```
 

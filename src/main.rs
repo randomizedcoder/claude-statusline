@@ -7,15 +7,19 @@
 // Claude Code's shape, so the build has no dependencies.
 //
 // Output format:
-//   <profile> <dir> [<branch>] | c:<K>k:USED%/REMAIN% [| s:USED%/REMAIN% [<reset>] | <tier>] [| <model> [<effort>]]
+//   <profile> <dir> [<branch>] | c:<K>k:USED%/REMAIN% [| s:USED%/REMAIN% [<reset>] | <tier>] [| <model> [<effort>]] [| idle <T>]
 //   <K>k    = tokens currently in the context window (input+output), rounded to nearest 1k
 //   <reset> = time until the 5-hour rate-limit window resets, e.g. 2h13m / 45m
 //   <tier>  = subscription tier, shown only when rate_limits is absent
+//   <T>     = time since the transcript last changed (a prompt from you or
+//             output from Claude), in IDLE_STEP_MIN steps; hidden until the
+//             first step. Set statusLine.refreshInterval (e.g. 60) in
+//             settings.json so it advances while nothing else is happening.
 //
 // Palettes:
 //   context (c): green / orange / red   at <50 / <80 / >=80 (red from 180k tokens)
 //   session (s): bright blue / bright magenta / bright red
-//   branch: yellow; model + effort: dim
+//   branch: yellow; model + effort: dim; idle: pastel orange
 //
 // Security: every string printed comes from outside this program (the JSON,
 // the environment, .git/HEAD of whatever directory you're in, the credentials
@@ -36,6 +40,10 @@ const MAX_BRANCH: usize = 64;
 const SHORT_HASH: usize = 7;
 // Cap for any other printed string (dir, model, profile, ...).
 const MAX_TEXT: usize = 128;
+
+// Idle segment granularity: hidden for the first step, then rounds down to a
+// multiple of this, so it changes at most once per step.
+const IDLE_STEP_MIN: i64 = 5;
 
 // ---------- tiny JSON ----------
 
@@ -287,6 +295,22 @@ fn fmt_reset(resets_at: i64, now: i64) -> Option<String> {
     })
 }
 
+// Time since the last transcript change, rounded down to IDLE_STEP_MIN:
+// "5m", "55m", "1h0m", "2h15m". None before the first step (or if the
+// file's mtime is in the future).
+fn fmt_idle(last_change: i64, now: i64) -> Option<String> {
+    let mins = (now - last_change) / 60 / IDLE_STEP_MIN * IDLE_STEP_MIN;
+    if mins <= 0 {
+        return None;
+    }
+    let (h, m) = (mins / 60, mins % 60);
+    Some(if h > 0 {
+        format!("{h}h{m}m")
+    } else {
+        format!("{m}m")
+    })
+}
+
 fn tier_abbrev(s: &str) -> String {
     match s {
         "enterprise" => "ent".into(),
@@ -323,6 +347,8 @@ struct Env {
     read_head: fn(&str) -> Option<String>,
     // subscription tier for a config dir
     read_tier: fn(Option<&str>) -> Option<String>,
+    // modification time (unix seconds) of a file, for the transcript
+    read_mtime: fn(&str) -> Option<i64>,
 }
 
 const CYAN: &str = "\x1b[36m";
@@ -336,6 +362,7 @@ const SESS_MID: &str = "\x1b[95m";
 const SESS_HIGH: &str = "\x1b[91m";
 const YELLOW: &str = "\x1b[33m";
 const DIM: &str = "\x1b[2m";
+const PASTEL_ORANGE: &str = "\x1b[38;5;216m";
 
 fn num(v: Option<&Val>) -> Option<f64> {
     v.and_then(|v| v.as_f64())
@@ -415,6 +442,14 @@ fn render(input: &str, env: &Env) -> String {
     if let Some(e) = effort {
         out += &format!(" {DIM}{e}{RESET}");
     }
+    if let Some(idle) = root
+        .get("transcript_path")
+        .and_then(|v| v.as_str())
+        .and_then(env.read_mtime)
+        .and_then(|t| fmt_idle(t, env.now))
+    {
+        out += &format!(" | {PASTEL_ORANGE}idle {idle}{RESET}");
+    }
     out
 }
 
@@ -437,6 +472,11 @@ fn read_tier(config_dir: Option<&str>) -> Option<String> {
     Some(tier_abbrev(tier))
 }
 
+fn read_mtime(path: &str) -> Option<i64> {
+    let t = fs::metadata(path).ok()?.modified().ok()?;
+    Some(t.duration_since(UNIX_EPOCH).ok()?.as_secs() as i64)
+}
+
 fn main() {
     let mut input = String::new();
     let _ = io::stdin().read_to_string(&mut input);
@@ -448,6 +488,7 @@ fn main() {
             .unwrap_or(0),
         read_head,
         read_tier,
+        read_mtime,
     };
     let mut out = BufWriter::new(io::stdout().lock());
     let _ = out.write_all(render(&input, &env).as_bytes());
