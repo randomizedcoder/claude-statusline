@@ -1,7 +1,10 @@
-use super::*;
+use crate::claude::*;
+use crate::json::*;
+use crate::status::*;
+use std::borrow::Cow;
 
 // Strip ANSI SGR colour codes (ESC [ ... m) so expectations stay readable.
-fn plain(s: &str) -> String {
+pub(crate) fn plain(s: &str) -> String {
     let mut out = String::new();
     let mut it = s.chars().peekable();
     while let Some(c) = it.next() {
@@ -19,7 +22,7 @@ fn plain(s: &str) -> String {
 }
 
 // The only escapes render() may emit are its own SGR colour codes.
-fn only_sgr_escapes(s: &str) -> bool {
+pub(crate) fn only_sgr_escapes(s: &str) -> bool {
     let b = s.as_bytes();
     let mut i = 0;
     while i < b.len() {
@@ -42,16 +45,16 @@ fn only_sgr_escapes(s: &str) -> bool {
     !s.chars().any(|c| ('\u{80}'..='\u{9f}').contains(&c))
 }
 
-fn no_head(_: &str) -> Option<String> {
+pub(crate) fn no_head(_: &str) -> Option<String> {
     None
 }
 fn no_tier(_: Option<&str>) -> Option<String> {
     None
 }
-fn head_main(_: &str) -> Option<String> {
+pub(crate) fn head_main(_: &str) -> Option<String> {
     Some("ref: refs/heads/main\n".into())
 }
-fn head_evil(_: &str) -> Option<String> {
+pub(crate) fn head_evil(_: &str) -> Option<String> {
     Some("ref: refs/heads/a\x1b]52;c;ZXZpbA==\x07b\n".into())
 }
 fn tier_max(_: Option<&str>) -> Option<String> {
@@ -71,7 +74,7 @@ fn mtime_1m_ago(_: &str) -> Option<i64> {
     Some(NOW - 60)
 }
 
-const NOW: i64 = 1_800_000_000;
+pub(crate) const NOW: i64 = 1_800_000_000;
 
 fn env(
     config_dir: Option<&str>,

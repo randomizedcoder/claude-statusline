@@ -1,5 +1,5 @@
 {
-  description = "Fast, dependency-free statusline for Claude Code";
+  description = "Fast, dependency-free statusline for Claude Code and Codex";
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 
@@ -23,7 +23,7 @@
         # cargo test (the table-driven suite) runs in checkPhase.
         doCheck = true;
         meta = {
-          description = "Fast, dependency-free statusline for Claude Code";
+          description = "Fast, dependency-free statusline for Claude Code and Codex";
           homepage = "https://github.com/randomizedcoder/claude-statusline";
           license = lib.licenses.mit;
           mainProgram = "claude-statusline";
@@ -63,7 +63,7 @@
               strace -f -c "$b" <"$fixture" 2>&1 >/dev/null | tail -1
             done
           fi
-          echo "== in-process render only: cargo test --release -- --ignored --nocapture bench_render"
+          echo "== in-process (render, Codex read): cargo test --release -- --ignored --nocapture bench_"
         '';
       };
     in

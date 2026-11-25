@@ -1,7 +1,8 @@
 # claude-statusline
 
 A fast, dependency-free [statusline](https://code.claude.com/docs/en/statusline)
-for Claude Code. Single Rust binary, std only, sub-millisecond.
+for Claude Code, and the same line in the [Codex](https://github.com/openai/codex)
+footer. Single Rust binary, std only, sub-millisecond.
 
 ```
 personal nixos main | c:12k:42%/57% | s:30%/70% 2h13m | Opus 5.5 hi | idle 15m
@@ -16,14 +17,48 @@ personal nixos main | c:12k:42%/57% | s:30%/70% 2h13m | Opus 5.5 hi | idle 15m
 | `Opus 5.5 hi` | model and effort level |
 | `idle 15m` | time since the transcript last changed (your prompt or Claude's output), in 5-minute steps, pastel orange. Hidden for the first 5 minutes |
 
+## Codex
+
+`claude-statusline codex` is a stdio MCP statusline provider for the Codex
+TUI (0.171+, experimental). Codex starts it once and reads it every second,
+so there's no per-refresh start-up cost: a read takes ~6 µs. It shows the same
+segments, translated from Codex's snapshot:
+
+| Segment | From |
+|---|---|
+| profile | `--profile NAME`, else basename of `$CODEX_HOME` (only visible if listed in the server's `env_vars`), else Codex's `config.profile` |
+| dir, branch | `thread.workspace.cwd`; branch from the nearest `.git` above it (worktrees too) |
+| `c:` | `thread.usage.context.used_tokens` / `used_percentage` |
+| `s:` | `account.rate_limits[limit_id = "codex"].primary_limit` (5-hour); remaining clamps at 0 |
+| model, effort | `thread.model.display_name`, `reasoning_level` |
+| `idle` | time since the thread's agent state or token counts last changed; hidden while the agent is working |
+
+Enable it in `$CODEX_HOME/config.toml`:
+
+```toml
+[features]
+tui_extensions_statusline = true
+
+[tui]
+status_line_provider = { server = "claude-statusline", tool = "statusline" }
+
+[mcp_servers.claude-statusline]
+command = "/path/to/claude-statusline"
+args = ["codex", "--profile", "personal"]
+```
+
+Or pick it in `/statusline` → *Choose a status line provider*. If the footer
+falls back to the default, F2 shows why. Bad input renders defaults rather
+than an error, since any failed read stops Codex polling.
+
 ## Security
 
-Everything it prints comes from outside the program: Claude Code's JSON,
-the environment, the `.git/HEAD` of whatever directory you're in, and the
-credentials file. Control characters are stripped from all of them, so a
-crafted repository can't inject terminal escape sequences (clipboard writes
-via OSC 52, fake hyperlinks, title changes). Branch names are limited to
-git-ref-safe ASCII and capped in length.
+Everything it prints comes from outside the program: Claude Code's JSON or
+Codex's snapshot, the environment, the `.git/HEAD` of whatever directory
+you're in, and the credentials file. Control characters are stripped from all
+of them, so a crafted repository can't inject terminal escape sequences
+(clipboard writes via OSC 52, fake hyperlinks, title changes). Branch names are
+limited to git-ref-safe ASCII and capped in length.
 
 The credentials file is only read for its `subscriptionType` field; no token
 is printed or stored.
@@ -35,7 +70,7 @@ Pin a tag; `flake.lock` records the commit and narHash:
 ```nix
 # flake.nix
 inputs.claude-statusline = {
-  url = "github:randomizedcoder/claude-statusline/v0.3.0";
+  url = "github:randomizedcoder/claude-statusline/v0.4.0";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -82,7 +117,7 @@ Reproduce, optionally comparing against other builds:
 
 ```
 nix run .#bench -- /nix/store/...-claude-statusline-0.2.0/bin/claude-statusline
-cargo test --release -- --ignored --nocapture bench_render
+cargo test --release -- --ignored --nocapture bench_   # render + Codex read
 ```
 
 ## Develop
@@ -94,4 +129,7 @@ nix flake check   # build + tests + clippy -D warnings
 ```
 
 Tests are table-driven (`src/tests.rs`); each row has a `description` and
-`expected`. `tests/binary.rs` runs the built binary end to end.
+`expected`. `tests/binary.rs` runs the built binary end to end, in both
+modes. Layout: `src/json.rs` (parser/writer), `src/status.rs` (shared
+`Status` → spans → ANSI or UiTree), `src/claude.rs` and `src/codex.rs`
+(front-ends).
